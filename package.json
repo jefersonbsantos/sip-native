@@ -12,7 +12,13 @@
     "expo": "~52.0.46",
     "expo-status-bar": "~2.0.1",
     "react": "18.3.1",
-    "react-native": "0.76.9"
+    "react-native": "0.76.9",
+    "react-native-callkeep": "^4.3.16",
+    "react-native-incall-manager": "^4.2.0",
+    "react-native-pjsip": "^2.7.4",
+    "react-native-webrtc": "^124.0.5",
+    "zod": "^3.24.3",
+    "zustand": "^5.0.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
