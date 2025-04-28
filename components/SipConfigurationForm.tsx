@@ -1,28 +1,63 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
 // import { useSip } from '../context/SipContext'; // Remover import do contexto antigo
-import { useSipStore, sipConfigSchema } from "../store/sipStore"; // Importar store Zustand e schema Zod
+import { useSipStore, sipConfigSchema, SipConfig } from "../store/sipStore"; // Importar store Zustand e schema Zod
+import AsyncStorage from "@react-native-async-storage/async-storage"; // Importar AsyncStorage
 import { ZodError } from "zod";
+
+const ASYNC_STORAGE_SIP_CONFIG_KEY = "sipConfig"; // Mesma chave usada no hook
 
 export default function SipConfigurationForm() {
   // const { setSipConfig } = useSip(); // Remover uso do contexto antigo
-  const setSipConfig = useSipStore((state) => state.setSipConfig); // Obter ação do store Zustand
+  const { sipConfig, setSipConfig } = useSipStore((state) => ({
+    sipConfig: state.sipConfig,
+    setSipConfig: state.setSipConfig,
+  }));
 
   const [server, setServer] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({}); // Estado para erros de validação
 
-  const handleSaveConfig = () => {
+  // Efeito para preencher o formulário quando a config for carregada/modificada
+  useEffect(() => {
+    if (sipConfig) {
+      setServer(sipConfig.server);
+      setUsername(sipConfig.username);
+      setPassword(sipConfig.password);
+      setErrors({}); // Limpar erros antigos ao carregar
+    }
+    // Se sipConfig se tornar null (ex: logout futuro), poderíamos limpar o form aqui
+  }, [sipConfig]);
+
+  const handleSaveConfig = async () => {
     const configToValidate = { server, username, password };
     try {
-      // Validar usando o schema Zod
       const validatedConfig = sipConfigSchema.parse(configToValidate);
-
-      // Limpar erros antigos
       setErrors({});
 
-      // Salva a configuração no store Zustand
+      // Salvar no AsyncStorage ANTES de atualizar o estado global
+      try {
+        await AsyncStorage.setItem(
+          ASYNC_STORAGE_SIP_CONFIG_KEY,
+          JSON.stringify(validatedConfig)
+        );
+        console.log("Configuração SIP salva no AsyncStorage.");
+      } catch (error) {
+        console.error(
+          "Erro ao salvar configuração SIP no AsyncStorage:",
+          error
+        );
+        Alert.alert(
+          "Erro",
+          "Não foi possível salvar a configuração permanentemente."
+        );
+        // Considerar não atualizar o estado global se o salvamento falhar?
+        // Ou apenas alertar o usuário?
+        return; // Impedir atualização do estado global se salvar falhou
+      }
+
+      // Atualizar estado global (Zustand)
       setSipConfig(validatedConfig);
       Alert.alert("Sucesso", "Configuração SIP salva!");
       // Poderíamos limpar os campos aqui se desejado
@@ -48,7 +83,8 @@ export default function SipConfigurationForm() {
         Alert.alert("Erro", "Ocorreu um erro inesperado.");
         setErrors({}); // Limpar erros
       }
-      setSipConfig(null); // Garantir que não há config inválida no store
+      // Não limpar config no store aqui, pois pode ser um erro de validação temporário
+      // setSipConfig(null); // Remover esta linha do catch
     }
   };
 

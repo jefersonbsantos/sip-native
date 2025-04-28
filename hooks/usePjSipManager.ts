@@ -1,11 +1,14 @@
-import { useEffect, useRef, useCallback } from "react";
-import { Alert } from "react-native";
+import { useEffect, useRef, useCallback, useState } from "react";
+import { Alert, Platform } from "react-native";
 import PjSip, { SipEndpoint, SipAccount, SipCall } from "react-native-pjsip";
+import InCallManager from "react-native-incall-manager";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   useSipStore,
   SipConfig,
   ConnectionStatus,
   CallInfo,
+  sipConfigSchema,
 } from "../store/sipStore";
 
 // Função para mapear estados PJSIP para texto legível
@@ -30,19 +33,32 @@ function getCallStateText(state: string): string {
   }
 }
 
-export function usePjSipManager() {
-  const { sipConfig, setConnectionStatus, setActiveCall } = useSipStore(
-    (state) => ({
+// Definir o tipo de retorno do Hook
+interface PjSipManagerHook {
+  makeCall: (destination: string) => Promise<void>;
+  hangupCall: () => Promise<void>;
+  answerCall: () => Promise<void>;
+  declineCall: () => Promise<void>;
+  toggleSpeaker: () => void;
+  isSpeakerOn: boolean;
+}
+
+const ASYNC_STORAGE_SIP_CONFIG_KEY = "sipConfig";
+
+export function usePjSipManager(): PjSipManagerHook {
+  const { sipConfig, setConnectionStatus, setActiveCall, setSipConfig } =
+    useSipStore((state) => ({
       sipConfig: state.sipConfig,
       setConnectionStatus: state.setConnectionStatus,
       setActiveCall: state.setActiveCall,
-    })
-  );
+      setSipConfig: state.setSipConfig,
+    }));
 
   // Usar useRef para manter referências ao endpoint e account sem causar re-renderizações
   const endpointRef = useRef<any | null>(null);
   const accountRef = useRef<any | null>(null);
   const activeCallRef = useRef<any | null>(null);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
 
   const updateStatus = useCallback(
     (status: ConnectionStatus) => {
@@ -65,6 +81,11 @@ export function usePjSipManager() {
       }
       activeCallRef.current = null;
     }
+    // Parar InCallManager e Ringtone ao limpar a chamada
+    console.log("Parando InCallManager e Ringtone (clearActiveCall)");
+    InCallManager.stopRingtone();
+    InCallManager.stop();
+    setIsSpeakerOn(false);
     setActiveCall(null);
   }, [setActiveCall]);
 
@@ -89,9 +110,19 @@ export function usePjSipManager() {
         };
         setActiveCall(updatedCallInfo);
 
-        if (newState === "PJSIP_INV_STATE_DISCONNECTED") {
-          console.log(`Chamada ${call.getId()} desconectada.`);
-          // Garantir que a ref também seja limpa se esta for a chamada ativa
+        if (newState === "PJSIP_INV_STATE_CONFIRMED") {
+          console.log("Chamada confirmada, iniciando InCallManager...");
+          InCallManager.start({ media: "audio" });
+          InCallManager.setForceSpeakerphoneOn(false);
+          InCallManager.setSpeakerphoneOn(false);
+          setIsSpeakerOn(false);
+          if (Platform.OS === "ios") {
+            InCallManager.setMicrophoneMute(false);
+          }
+        } else if (newState === "PJSIP_INV_STATE_DISCONNECTED") {
+          console.log(
+            `Chamada ${call.getId()} desconectada (evento on_call_state).`
+          );
           if (activeCallRef.current?.getId() === call.getId()) {
             clearActiveCall();
           }
@@ -139,7 +170,9 @@ export function usePjSipManager() {
 
   // Definir hangupCall ANTES de makeCall
   const hangupCall = useCallback(async () => {
-    console.log("Tentando desligar a chamada...");
+    console.log("Tentando desligar/cancelar a chamada...");
+    // Parar ringtone caso esteja tocando (ex: usuário cancela incoming call)
+    InCallManager.stopRingtone();
     const call = activeCallRef.current;
     if (!call) {
       return;
@@ -194,6 +227,10 @@ export function usePjSipManager() {
           stateText: getCallStateText("PJSIP_INV_STATE_CALLING"),
         };
         setActiveCall(initialCallInfo);
+
+        // Tocar Ringtone
+        console.log("Iniciando Ringtone...");
+        InCallManager.startRingtone("_DEFAULT_");
       } catch (error) {
         console.error("Erro ao realizar chamada:", error);
         Alert.alert(
@@ -208,7 +245,49 @@ export function usePjSipManager() {
     [sipConfig, setActiveCall, clearActiveCall, hangupCall, attachCallListeners]
   );
 
-  // Efeito principal para gerenciar a conexão
+  // --- Efeito para Carregar Configuração ao Montar --- //
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const storedConfigJson = await AsyncStorage.getItem(
+          ASYNC_STORAGE_SIP_CONFIG_KEY
+        );
+        if (storedConfigJson) {
+          console.log(
+            "Configuração SIP encontrada no AsyncStorage, carregando..."
+          );
+          const storedConfig = JSON.parse(storedConfigJson);
+          // Validar os dados carregados antes de usar
+          const validation = sipConfigSchema.safeParse(storedConfig);
+          if (validation.success) {
+            setSipConfig(validation.data);
+          } else {
+            console.warn(
+              "Configuração SIP armazenada inválida:",
+              validation.error.flatten()
+            );
+            await AsyncStorage.removeItem(ASYNC_STORAGE_SIP_CONFIG_KEY); // Remover config inválida
+          }
+        } else {
+          console.log("Nenhuma configuração SIP encontrada no AsyncStorage.");
+        }
+      } catch (error) {
+        console.error(
+          "Erro ao carregar configuração SIP do AsyncStorage:",
+          error
+        );
+      }
+    };
+
+    // Carregar apenas se não houver configuração no estado ainda (evitar sobrescrever)
+    if (!sipConfig) {
+      loadConfig();
+    }
+    // Executar apenas uma vez ao montar o hook
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Array de dependências vazio
+
+  // --- Efeito de Inicialização e Registro (depende de sipConfig) --- //
   useEffect(() => {
     const initializeAndRegister = async (config: SipConfig) => {
       // Prevenir inicialização dupla se já houver um endpoint
@@ -293,17 +372,23 @@ export function usePjSipManager() {
             return;
           }
 
+          // Definir como chamada ativa
           activeCallRef.current = call;
-          attachCallListeners(call);
-          console.log("Chamada iniciada, ID:", call.getId());
+          attachCallListeners(call); // Anexar listeners on_call_state etc.
 
-          const initialCallInfo: CallInfo = {
+          // Atualizar o store
+          const callInfo = call.getInfo();
+          const incomingCallInfo: CallInfo = {
             id: call.getId(),
-            remoteUri: call.getInfo().remoteUri,
-            state: "PJSIP_INV_STATE_CALLING",
-            stateText: getCallStateText("PJSIP_INV_STATE_CALLING"),
+            remoteUri: callInfo.remoteUri,
+            state: "PJSIP_INV_STATE_INCOMING",
+            stateText: getCallStateText("PJSIP_INV_STATE_INCOMING"),
           };
-          setActiveCall(initialCallInfo);
+          setActiveCall(incomingCallInfo);
+
+          // Tocar Ringtone DEPOIS de atualizar o estado
+          console.log("Iniciando Ringtone...");
+          InCallManager.startRingtone("_DEFAULT_");
         });
         // -------------------------
 
@@ -332,7 +417,24 @@ export function usePjSipManager() {
 
     // Removido setConnectionStatus da dependência, pois usamos updateStatus (que tem setConnectionStatus como dep)
     // Isso evita loops se o status mudar rapidamente.
-  }, [sipConfig, cleanupPjsip, updateStatus]);
+  }, [
+    sipConfig,
+    cleanupPjsip,
+    updateStatus,
+    setActiveCall,
+    attachCallListeners,
+  ]);
+
+  // Definir toggleSpeaker AQUI, antes do return
+  const toggleSpeaker = useCallback(() => {
+    const nextSpeakerState = !isSpeakerOn;
+    console.log(`Alternando speaker para: ${nextSpeakerState ? "ON" : "OFF"}`);
+    InCallManager.setSpeakerphoneOn(nextSpeakerState);
+    if (Platform.OS === "ios") {
+      InCallManager.setForceSpeakerphoneOn(nextSpeakerState);
+    }
+    setIsSpeakerOn(nextSpeakerState);
+  }, [isSpeakerOn]);
 
   // Retornar funções e estados relevantes (status, etc.)
   // Por enquanto, o hook apenas gerencia a conexão em background.
@@ -340,6 +442,9 @@ export function usePjSipManager() {
   return {
     makeCall,
     hangupCall,
-    // Poderíamos retornar connectionStatus daqui também, mas já está no store
+    answerCall: () => Promise.resolve(),
+    declineCall: () => Promise.resolve(),
+    toggleSpeaker,
+    isSpeakerOn,
   };
 }

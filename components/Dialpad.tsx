@@ -30,9 +30,21 @@ const dialpadKeys = [
 
 export default function Dialpad() {
   const [dialedNumber, setDialedNumber] = useState("");
-  const { makeCall, hangupCall } = usePjSipManager();
+  const {
+    makeCall,
+    hangupCall,
+    answerCall,
+    declineCall,
+    toggleSpeaker,
+    isSpeakerOn,
+  } = usePjSipManager();
   const activeCall = useSipStore((state) => state.activeCall);
   const connectionStatus = useSipStore((state) => state.connectionStatus);
+
+  // Flags para controle da UI
+  const isCallActive = activeCall !== null;
+  const isIncoming = activeCall?.state === "PJSIP_INV_STATE_INCOMING";
+  const isCallConnected = activeCall?.state === "PJSIP_INV_STATE_CONFIRMED";
 
   const handleKeyPress = (key: string) => {
     setDialedNumber((prev) => prev + key);
@@ -45,86 +57,143 @@ export default function Dialpad() {
   const handleCall = () => {
     if (dialedNumber) {
       makeCall(dialedNumber);
-      // Não limpar o número aqui, talvez o usuário precise ver durante a chamada
     }
   };
 
   const handleHangup = () => {
     hangupCall();
-    setDialedNumber(""); // Limpar número ao desligar
+    setDialedNumber("");
+  };
+
+  const handleAnswer = () => {
+    answerCall();
+  };
+
+  const handleDecline = () => {
+    declineCall();
+  };
+
+  const handleToggleSpeaker = () => {
+    toggleSpeaker();
   };
 
   // Determina se o botão de ligar deve estar ativo
   const isCallButtonDisabled = useMemo(() => {
-    return (
-      activeCall !== null || connectionStatus !== "Registrado" || !dialedNumber
-    );
-  }, [activeCall, connectionStatus, dialedNumber]);
+    return isCallActive || connectionStatus !== "Registrado" || !dialedNumber;
+  }, [isCallActive, connectionStatus, dialedNumber]);
 
   // Determina se o botão de desligar deve estar ativo
   const isHangupButtonDisabled = useMemo(() => {
-    return activeCall === null;
-  }, [activeCall]);
+    return !isCallActive || isIncoming;
+  }, [isCallActive, isIncoming]);
 
   return (
     <View style={styles.container}>
       <TextInput
         style={styles.display}
-        value={dialedNumber}
-        placeholder="Digite o número"
-        editable={false} // Apenas exibição
+        value={
+          isIncoming
+            ? `Recebendo de: ${activeCall?.remoteUri}`
+            : isCallConnected
+            ? `${activeCall?.stateText} (${activeCall?.remoteUri})`
+            : isCallActive
+            ? `${activeCall?.stateText} (${activeCall?.remoteUri})`
+            : dialedNumber
+        }
+        placeholder={!isCallActive ? "Digite o número" : ""}
+        editable={false}
         placeholderTextColor="#aaa"
       />
 
-      <View style={styles.keypadContainer}>
-        {dialpadKeys.map((key) => (
+      {!isCallActive && (
+        <View style={styles.keypadContainer}>
+          {dialpadKeys.map((key) => (
+            <TouchableOpacity
+              key={key}
+              style={styles.keyButton}
+              onPress={() => handleKeyPress(key)}
+            >
+              <Text style={styles.keyText}>{key}</Text>
+            </TouchableOpacity>
+          ))}
           <TouchableOpacity
-            key={key}
-            style={styles.keyButton}
-            onPress={() => handleKeyPress(key)}
-            disabled={activeCall !== null} // Desabilitar teclado durante chamada
+            style={[styles.keyButton, styles.actionKey]}
+            onPress={handleBackspace}
+            disabled={dialedNumber.length === 0}
           >
-            <Text style={styles.keyText}>{key}</Text>
+            <Text style={styles.keyText}>⌫</Text>
           </TouchableOpacity>
-        ))}
-        {/* Adicionar botão de Backspace (pode ser um ícone) */}
-        <TouchableOpacity
-          style={[styles.keyButton, styles.actionKey]} // Estilo diferente
-          onPress={handleBackspace}
-          disabled={activeCall !== null || dialedNumber.length === 0}
-        >
-          <Text style={styles.keyText}>⌫</Text> {/* Ícone simples */}
-        </TouchableOpacity>
-      </View>
+        </View>
+      )}
 
       <View style={styles.callButtonsContainer}>
-        <TouchableOpacity
-          style={[
-            styles.callButton,
-            styles.callButtonCall,
-            isCallButtonDisabled ? styles.disabledButton : {},
-          ]}
-          onPress={handleCall}
-          disabled={isCallButtonDisabled}
-        >
-          <Text style={styles.callButtonText}>Ligar</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.callButton,
-            styles.callButtonHangup,
-            isHangupButtonDisabled ? styles.disabledButton : {},
-          ]}
-          onPress={handleHangup}
-          disabled={isHangupButtonDisabled}
-        >
-          <Text style={styles.callButtonText}>Desligar</Text>
-        </TouchableOpacity>
+        {isIncoming ? (
+          <>
+            <TouchableOpacity
+              style={[styles.callButton, styles.callButtonAnswer]}
+              onPress={handleAnswer}
+            >
+              <Text style={styles.callButtonText}>Atender</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.callButton, styles.callButtonDecline]}
+              onPress={handleDecline}
+            >
+              <Text style={styles.callButtonText}>Rejeitar</Text>
+            </TouchableOpacity>
+          </>
+        ) : isCallConnected ? (
+          <>
+            <TouchableOpacity
+              style={styles.callButton}
+              onPress={handleToggleSpeaker}
+            >
+              <Text style={styles.callButtonText}>
+                {isSpeakerOn ? "Speaker ON" : "Speaker OFF"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.callButton, styles.callButtonHangup]}
+              onPress={handleHangup}
+            >
+              <Text style={styles.callButtonText}>Desligar</Text>
+            </TouchableOpacity>
+          </>
+        ) : isCallActive ? (
+          <TouchableOpacity
+            style={[styles.callButton, styles.callButtonHangup]}
+            onPress={handleHangup}
+          >
+            <Text style={styles.callButtonText}>Cancelar</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[
+                styles.callButton,
+                styles.callButtonCall,
+                isCallButtonDisabled ? styles.disabledButton : {},
+              ]}
+              onPress={handleCall}
+              disabled={isCallButtonDisabled}
+            >
+              <Text style={styles.callButtonText}>Ligar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.callButton,
+                styles.callButtonHangup,
+                styles.disabledButton,
+              ]}
+              disabled={true}
+            >
+              <Text style={styles.callButtonText}>Desligar</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
 
-      {/* Exibir status da chamada ativa */}
-      {activeCall && (
+      {isCallActive && !isIncoming && (
         <View style={styles.callStatusContainer}>
           <Text style={styles.callStatusText}>Chamada Ativa:</Text>
           <Text style={styles.callStatusInfo}>{activeCall.remoteUri}</Text>
@@ -145,12 +214,13 @@ const styles = StyleSheet.create({
   },
   display: {
     width: "100%",
-    height: 50,
+    minHeight: 50,
     borderWidth: 1,
     borderColor: "#ccc",
     borderRadius: 5,
     paddingHorizontal: 15,
-    fontSize: 24,
+    paddingVertical: 10,
+    fontSize: 20,
     textAlign: "center",
     marginBottom: 20,
     color: "#333",
@@ -160,7 +230,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
-    width: buttonSize * 3 + 40, // Largura baseada no tamanho dos botões
+    width: buttonSize * 3 + 40,
   },
   keyButton: {
     width: buttonSize,
@@ -183,6 +253,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-around",
     width: "100%",
     marginTop: 20,
+    minHeight: 60,
   },
   callButton: {
     paddingVertical: 15,
@@ -193,10 +264,16 @@ const styles = StyleSheet.create({
     minWidth: 120,
   },
   callButtonCall: {
-    backgroundColor: "#28a745", // Verde
+    backgroundColor: "#28a745",
   },
   callButtonHangup: {
-    backgroundColor: "#dc3545", // Vermelho
+    backgroundColor: "#dc3545",
+  },
+  callButtonAnswer: {
+    backgroundColor: "#28a745",
+  },
+  callButtonDecline: {
+    backgroundColor: "#ffc107",
   },
   callButtonText: {
     color: "#fff",

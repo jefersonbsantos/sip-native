@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { z } from "zod";
 
 // 1. Schema de Validação Zod para a Configuração SIP
@@ -38,6 +40,8 @@ export interface Contact {
   number: string; // O número/ramal SIP
 }
 
+const ASYNC_STORAGE_CONTACTS_KEY = "sipContacts"; // Chave separada para contatos
+
 // 3. Definir a interface do Estado do Store
 interface SipState {
   sipConfig: SipConfig | null;
@@ -53,31 +57,48 @@ interface SipState {
 }
 
 // 4. Criar o Store Zustand
-export const useSipStore = create<SipState>((set) => ({
-  // Estado Inicial
-  sipConfig: null,
-  connectionStatus: "Desconectado", // Estado inicial do status
-  activeCall: null, // Inicializar chamada ativa como null
-  contacts: [
-    // Inicializar com alguns contatos de exemplo
-    { id: "1", name: "Ramal Teste 1", number: "1001" },
-    { id: "2", name: "Ramal Teste 2", number: "1002" },
-    { id: "3", name: "Echo Test (Público)", number: "*43" }, // Exemplo comum
-  ],
+export const useSipStore = create<SipState>()(
+  persist(
+    (set) => ({
+      // Estado Inicial (sipConfig não é inicializado aqui, é carregado pelo hook)
+      sipConfig: null,
+      connectionStatus: "Desconectado",
+      activeCall: null,
+      // Contatos serão carregados do storage, mas definimos um array vazio como fallback
+      contacts: [],
 
-  // Ações
-  setSipConfig: (config) => set({ sipConfig: config }),
-  setConnectionStatus: (status) => set({ connectionStatus: status }), // Implementar ação
-  setActiveCall: (callInfo) => set({ activeCall: callInfo }), // Implementar ação
-  addContact: (contactData) =>
-    set((state) => ({
-      contacts: [
-        ...state.contacts,
-        { ...contactData, id: Date.now().toString() }, // Adiciona com ID simples
-      ],
-    })),
-  removeContact: (id) =>
-    set((state) => ({
-      contacts: state.contacts.filter((contact) => contact.id !== id),
-    })),
-}));
+      // Ações
+      setSipConfig: (config) => set({ sipConfig: config }),
+      setConnectionStatus: (status) => set({ connectionStatus: status }),
+      setActiveCall: (callInfo) => set({ activeCall: callInfo }),
+      addContact: (contactData) =>
+        set((state) => ({
+          contacts: [
+            ...state.contacts,
+            { ...contactData, id: Date.now().toString() },
+          ],
+          // Persistência é automática agora
+        })),
+      removeContact: (id) =>
+        set((state) => ({
+          contacts: state.contacts.filter((contact) => contact.id !== id),
+          // Persistência é automática agora
+        })),
+    }),
+    {
+      name: ASYNC_STORAGE_CONTACTS_KEY, // Nome da chave no AsyncStorage
+      storage: createJSONStorage(() => AsyncStorage), // Usar AsyncStorage
+      partialize: (state) => ({ contacts: state.contacts }), // Persistir apenas 'contacts'
+      // onRehydrateStorage: (state) => { // Opcional: callback após carregar
+      //   console.log('Hydration finished.');
+      //   return (state, error) => {
+      //     if (error) {
+      //       console.error('An error happened during hydration', error);
+      //     } else {
+      //       console.log('Contacts rehydrated from storage');
+      //     }
+      //   }
+      // }
+    }
+  )
+);
