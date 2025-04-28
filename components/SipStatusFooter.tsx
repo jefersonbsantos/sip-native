@@ -32,13 +32,13 @@ export default function SipStatusFooter() {
 
 const styles = StyleSheet.create({
   footerContainer: {
-    position: "absolute", // Fixa no rodapé
+    position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     paddingVertical: 10,
     paddingHorizontal: 15,
-    backgroundColor: "#f0f0f0", // Cor de fundo para o rodapé
+    backgroundColor: "#f0f0f0",
     borderTopWidth: 1,
     borderTopColor: "#ccc",
     alignItems: "center",

@@ -3,15 +3,22 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { z } from "zod";
 
-// 1. Schema de Validação Zod para a Configuração SIP
+const ipv4Regex =
+  /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+const domainRegex =
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+\.?$/;
+
 export const sipConfigSchema = z.object({
-  server: z.string().min(1, "Servidor é obrigatório"), // Exemplo: não pode ser vazio
+  server: z
+    .string()
+    .min(1, "Servidor é obrigatório")
+    .refine((value) => ipv4Regex.test(value) || domainRegex.test(value), {
+      message: "Servidor deve ser um IP válido ou um nome de domínio",
+    }),
   username: z.string().min(1, "Usuário/Ramal é obrigatório"),
   password: z.string().min(1, "Senha é obrigatória"),
-  // Poderíamos adicionar validações mais específicas (ex: formato do servidor)
 });
 
-// 2. Inferir o tipo TypeScript a partir do schema Zod
 export type SipConfig = z.infer<typeof sipConfigSchema>;
 
 // Adicionar tipo para o Status da Conexão
@@ -23,51 +30,41 @@ export type ConnectionStatus =
   | "Erro"
   | "Configurando";
 
-// Interface para informações da chamada (pode ser importada do hook ou duplicada)
-// Por simplicidade, vamos duplicar/redefinir aqui, mas importar seria melhor
 export interface CallInfo {
   id: string;
   remoteUri: string;
   state: string;
-  stateText: string; // Texto descritivo do estado (ex: "Calling", "Confirmed")
-  // Adicionar mais infos úteis: direction ('incoming'/'outgoing'), duration, mediaState
+  stateText: string;
 }
 
-// Interface para Contato/Ramal
 export interface Contact {
-  id: string; // Identificador único (pode ser gerado)
+  id: string;
   name: string;
-  number: string; // O número/ramal SIP
+  number: string;
 }
 
-const ASYNC_STORAGE_CONTACTS_KEY = "sipContacts"; // Chave separada para contatos
+const ASYNC_STORAGE_CONTACTS_KEY = "sipContacts";
 
-// 3. Definir a interface do Estado do Store
 interface SipState {
   sipConfig: SipConfig | null;
   setSipConfig: (config: SipConfig | null) => void;
-  connectionStatus: ConnectionStatus; // Adicionar estado de conexão
-  setConnectionStatus: (status: ConnectionStatus) => void; // Adicionar ação para status
-  activeCall: CallInfo | null; // Adicionar estado da chamada ativa
-  setActiveCall: (callInfo: CallInfo | null) => void; // Adicionar ação para chamada
-  contacts: Contact[]; // Adicionar lista de contatos
-  addContact: (contact: Omit<Contact, "id">) => void; // Adicionar ação para adicionar
-  removeContact: (id: string) => void; // Adicionar ação para remover
-  // Poderíamos adicionar updateContact depois
+  connectionStatus: ConnectionStatus;
+  setConnectionStatus: (status: ConnectionStatus) => void;
+  activeCall: CallInfo | null;
+  setActiveCall: (callInfo: CallInfo | null) => void;
+  contacts: Contact[];
+  addContact: (contact: Omit<Contact, "id">) => void;
+  removeContact: (id: string) => void;
 }
 
-// 4. Criar o Store Zustand
 export const useSipStore = create<SipState>()(
   persist(
     (set) => ({
-      // Estado Inicial (sipConfig não é inicializado aqui, é carregado pelo hook)
       sipConfig: null,
       connectionStatus: "Desconectado",
       activeCall: null,
-      // Contatos serão carregados do storage, mas definimos um array vazio como fallback
       contacts: [],
 
-      // Ações
       setSipConfig: (config) => set({ sipConfig: config }),
       setConnectionStatus: (status) => set({ connectionStatus: status }),
       setActiveCall: (callInfo) => set({ activeCall: callInfo }),
@@ -77,28 +74,16 @@ export const useSipStore = create<SipState>()(
             ...state.contacts,
             { ...contactData, id: Date.now().toString() },
           ],
-          // Persistência é automática agora
         })),
       removeContact: (id) =>
         set((state) => ({
           contacts: state.contacts.filter((contact) => contact.id !== id),
-          // Persistência é automática agora
         })),
     }),
     {
-      name: ASYNC_STORAGE_CONTACTS_KEY, // Nome da chave no AsyncStorage
-      storage: createJSONStorage(() => AsyncStorage), // Usar AsyncStorage
-      partialize: (state) => ({ contacts: state.contacts }), // Persistir apenas 'contacts'
-      // onRehydrateStorage: (state) => { // Opcional: callback após carregar
-      //   console.log('Hydration finished.');
-      //   return (state, error) => {
-      //     if (error) {
-      //       console.error('An error happened during hydration', error);
-      //     } else {
-      //       console.log('Contacts rehydrated from storage');
-      //     }
-      //   }
-      // }
+      name: ASYNC_STORAGE_CONTACTS_KEY,
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({ contacts: state.contacts }),
     }
   )
 );

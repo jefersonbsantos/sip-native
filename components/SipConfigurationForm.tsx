@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
-// import { useSip } from '../context/SipContext'; // Remover import do contexto antigo
-import { useSipStore, sipConfigSchema, SipConfig } from "../store/sipStore"; // Importar store Zustand e schema Zod
-import AsyncStorage from "@react-native-async-storage/async-storage"; // Importar AsyncStorage
+import { useSipStore, sipConfigSchema, SipConfig } from "../store/sipStore";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ZodError } from "zod";
 
-const ASYNC_STORAGE_SIP_CONFIG_KEY = "sipConfig"; // Mesma chave usada no hook
+const ASYNC_STORAGE_SIP_CONFIG_KEY = "sipConfig";
 
 export default function SipConfigurationForm() {
-  // const { setSipConfig } = useSip(); // Remover uso do contexto antigo
   const { sipConfig, setSipConfig } = useSipStore((state) => ({
     sipConfig: state.sipConfig,
     setSipConfig: state.setSipConfig,
@@ -17,17 +15,15 @@ export default function SipConfigurationForm() {
   const [server, setServer] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({}); // Estado para erros de validação
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Efeito para preencher o formulário quando a config for carregada/modificada
   useEffect(() => {
     if (sipConfig) {
       setServer(sipConfig.server);
       setUsername(sipConfig.username);
       setPassword(sipConfig.password);
-      setErrors({}); // Limpar erros antigos ao carregar
+      setErrors({});
     }
-    // Se sipConfig se tornar null (ex: logout futuro), poderíamos limpar o form aqui
   }, [sipConfig]);
 
   const handleSaveConfig = async () => {
@@ -35,8 +31,6 @@ export default function SipConfigurationForm() {
     try {
       const validatedConfig = sipConfigSchema.parse(configToValidate);
       setErrors({});
-
-      // Salvar no AsyncStorage ANTES de atualizar o estado global
       try {
         await AsyncStorage.setItem(
           ASYNC_STORAGE_SIP_CONFIG_KEY,
@@ -52,19 +46,13 @@ export default function SipConfigurationForm() {
           "Erro",
           "Não foi possível salvar a configuração permanentemente."
         );
-        // Considerar não atualizar o estado global se o salvamento falhar?
-        // Ou apenas alertar o usuário?
-        return; // Impedir atualização do estado global se salvar falhou
+        return;
       }
 
-      // Atualizar estado global (Zustand)
       setSipConfig(validatedConfig);
       Alert.alert("Sucesso", "Configuração SIP salva!");
-      // Poderíamos limpar os campos aqui se desejado
-      // setServer(''); setUsername(''); setPassword('');
     } catch (error) {
       if (error instanceof ZodError) {
-        // Formatar erros do Zod para exibição
         const formattedErrors: Record<string, string> = {};
         error.errors.forEach((err) => {
           if (err.path[0]) {
@@ -72,19 +60,15 @@ export default function SipConfigurationForm() {
           }
         });
         setErrors(formattedErrors);
-        // Exibir um alerta geral ou mensagens nos campos
         Alert.alert(
           "Erro de Validação",
           "Por favor, corrija os campos indicados."
         );
       } else {
-        // Tratar outros erros inesperados
         console.error("Erro inesperado ao salvar config:", error);
         Alert.alert("Erro", "Ocorreu um erro inesperado.");
-        setErrors({}); // Limpar erros
+        setErrors({});
       }
-      // Não limpar config no store aqui, pois pode ser um erro de validação temporário
-      // setSipConfig(null); // Remover esta linha do catch
     }
   };
 
@@ -153,18 +137,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#ddd",
     padding: 10,
-    marginBottom: 5, // Reduzir margem para erro caber embaixo
+    marginBottom: 5,
     borderRadius: 4,
     fontSize: 16,
   },
   inputError: {
-    // Novo estilo para input com erro
     borderColor: "red",
   },
   errorText: {
-    // Novo estilo para texto de erro
     color: "red",
     fontSize: 12,
-    marginBottom: 10, // Espaço após a mensagem de erro
+    marginBottom: 10,
   },
 });

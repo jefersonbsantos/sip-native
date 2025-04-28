@@ -12,9 +12,13 @@ export default function App() {
   usePjSipManager();
 
   return (
-    // <SipProvider>
     <View style={styles.outerContainer}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <Text style={styles.title}>Teclado</Text>
+        <Dialpad />
+
+        <View style={styles.separator} />
+
         <Text style={styles.title}>Configuração SIP</Text>
         <SipConfigurationForm />
 
@@ -23,16 +27,10 @@ export default function App() {
         <Text style={styles.title}>Contatos</Text>
         <ContactList />
         <AddContactForm />
-
-        <View style={styles.separator} />
-
-        <Text style={styles.title}>Teclado</Text>
-        <Dialpad />
       </ScrollView>
       <SipStatusFooter />
       <StatusBar style="auto" />
     </View>
-    // </SipProvider>
   );
 }
 

@@ -11,7 +11,7 @@ import { usePjSipManager } from "../hooks/usePjSipManager";
 import { useSipStore } from "../store/sipStore";
 
 const { width } = Dimensions.get("window");
-const buttonSize = width * 0.2; // Tamanho do botão baseado na largura da tela
+const buttonSize = width * 0.2;
 
 const dialpadKeys = [
   "1",
@@ -41,7 +41,6 @@ export default function Dialpad() {
   const activeCall = useSipStore((state) => state.activeCall);
   const connectionStatus = useSipStore((state) => state.connectionStatus);
 
-  // Flags para controle da UI
   const isCallActive = activeCall !== null;
   const isIncoming = activeCall?.state === "PJSIP_INV_STATE_INCOMING";
   const isCallConnected = activeCall?.state === "PJSIP_INV_STATE_CONFIRMED";
@@ -77,12 +76,10 @@ export default function Dialpad() {
     toggleSpeaker();
   };
 
-  // Determina se o botão de ligar deve estar ativo
   const isCallButtonDisabled = useMemo(() => {
     return isCallActive || connectionStatus !== "Registrado" || !dialedNumber;
   }, [isCallActive, connectionStatus, dialedNumber]);
 
-  // Determina se o botão de desligar deve estar ativo
   const isHangupButtonDisabled = useMemo(() => {
     return !isCallActive || isIncoming;
   }, [isCallActive, isIncoming]);

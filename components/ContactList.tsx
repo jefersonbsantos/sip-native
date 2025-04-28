@@ -20,7 +20,6 @@ export default function ContactList() {
   };
 
   const handleRemoveContact = (id: string) => {
-    // Adicionar confirmação se desejar
     removeContact(id);
   };
 
@@ -47,7 +46,7 @@ export default function ContactList() {
             styles.button,
             styles.removeButton,
             activeCall ? styles.disabledButton : {},
-          ]} // Desabilitar durante chamada
+          ]}
           onPress={() => handleRemoveContact(item.id)}
           disabled={activeCall !== null}
         >
@@ -69,7 +68,6 @@ export default function ContactList() {
           style={styles.list}
         />
       )}
-      {/* Formulário para adicionar contatos virá aqui depois */}
     </View>
   );
 }
@@ -78,8 +76,6 @@ const styles = StyleSheet.create({
   container: {
     width: "90%",
     marginTop: 10,
-    // Adicionar altura ou flex se necessário dentro de um layout complexo
-    // maxHeight: 200, // Exemplo de altura máxima se precisar limitar
     borderWidth: 1,
     borderColor: "#eee",
     borderRadius: 5,
@@ -96,7 +92,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#eee",
   },
   contactInfo: {
-    flex: 1, // Ocupa espaço disponível
+    flex: 1,
     marginRight: 10,
   },
   contactName: {
@@ -119,10 +115,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   callButton: {
-    backgroundColor: "#007bff", // Azul
+    backgroundColor: "#007bff",
   },
   removeButton: {
-    backgroundColor: "#dc3545", // Vermelho
+    backgroundColor: "#dc3545",
   },
   buttonText: {
     color: "#fff",

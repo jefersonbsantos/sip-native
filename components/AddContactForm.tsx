@@ -3,10 +3,9 @@ import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
 import { useSipStore } from "../store/sipStore";
 import { z } from "zod";
 
-// Schema Zod simples para validação do formulário
 const contactFormSchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
-  number: z.string().min(1, "Número/Ramal é obrigatório"), // Poderia validar formato numérico/SIP aqui
+  number: z.string().min(1, "Número/Ramal é obrigatório"),
 });
 
 export default function AddContactForm() {
@@ -18,20 +17,16 @@ export default function AddContactForm() {
   const handleAddContact = () => {
     const formData = { name, number };
     try {
-      // Validar com Zod
       const validatedData = contactFormSchema.parse(formData);
-      setErrors({}); // Limpar erros
+      setErrors({});
 
-      // Chamar ação do store
       addContact(validatedData);
 
-      // Limpar formulário e dar feedback
       setName("");
       setNumber("");
       Alert.alert("Sucesso", "Contato adicionado!");
     } catch (error) {
       if (error instanceof z.ZodError) {
-        // Formatar e mostrar erros de validação Zod
         const formattedErrors: Record<string, string> = {};
         error.errors.forEach((err) => {
           if (err.path[0]) {
