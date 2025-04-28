@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "center",
-    width: buttonSize * 3 + 40,
+    width: buttonSize * 3 + 60,
   },
   keyButton: {
     width: buttonSize,

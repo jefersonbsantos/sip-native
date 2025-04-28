@@ -101,8 +101,7 @@ export default function SipConfigurationForm() {
         placeholder="ex: sip.example.com"
         autoCapitalize="none"
       />
-      {errors.server && <Text style={styles.errorText}>{errors.server}</Text>}{" "}
-      // Exibir erro
+      {errors.server && <Text style={styles.errorText}>{errors.server}</Text>}
       <Text style={styles.label}>Usuário/Ramal:</Text>
       <TextInput
         style={[styles.input, errors.username ? styles.inputError : null]}

@@ -6,6 +6,7 @@ import SipStatusFooter from "./components/SipStatusFooter";
 import { usePjSipManager } from "./hooks/usePjSipManager";
 import Dialpad from "./components/Dialpad";
 import ContactList from "./components/ContactList";
+import AddContactForm from "./components/AddContactForm";
 
 export default function App() {
   usePjSipManager();
@@ -21,6 +22,7 @@ export default function App() {
 
         <Text style={styles.title}>Contatos</Text>
         <ContactList />
+        <AddContactForm />
 
         <View style={styles.separator} />
 

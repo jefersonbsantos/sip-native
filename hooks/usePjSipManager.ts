@@ -3,6 +3,8 @@ import { Alert, Platform } from "react-native";
 import PjSip, { SipEndpoint, SipAccount, SipCall } from "react-native-pjsip";
 import InCallManager from "react-native-incall-manager";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import RNCallKeep, { CONSTANTS as CK_CONSTANTS } from "react-native-callkeep";
+import uuid from "react-native-uuid";
 import {
   useSipStore,
   SipConfig,
@@ -36,7 +38,7 @@ function getCallStateText(state: string): string {
 // Definir o tipo de retorno do Hook
 interface PjSipManagerHook {
   makeCall: (destination: string) => Promise<void>;
-  hangupCall: () => Promise<void>;
+  hangupCall: (pjsipCallIdToHangup?: string) => Promise<void>;
   answerCall: () => Promise<void>;
   declineCall: () => Promise<void>;
   toggleSpeaker: () => void;
@@ -59,6 +61,55 @@ export function usePjSipManager(): PjSipManagerHook {
   const accountRef = useRef<any | null>(null);
   const activeCallRef = useRef<any | null>(null);
   const [isSpeakerOn, setIsSpeakerOn] = useState(false);
+  // Mapeamento entre PJSIP Call ID e CallKeep UUID
+  const callKeepMappings = useRef<Record<string, string>>({});
+
+  // --- Funções Auxiliares e de Controle (Definir PRIMEIRO) --- //
+  const clearActiveCall = useCallback(
+    (pjsipCallId?: string) => {
+      const callIdToClear = pjsipCallId || activeCallRef.current?.getId();
+      if (!callIdToClear) return;
+
+      console.log(`Limpando chamada ativa PJSIP ID: ${callIdToClear}`);
+
+      // Encerrar chamada no CallKeep se existir mapeamento
+      const callKeepUUID = callKeepMappings.current[callIdToClear];
+      if (callKeepUUID) {
+        console.log(`Encerrando chamada CallKeep UUID: ${callKeepUUID}`);
+        RNCallKeep.endCall(callKeepUUID);
+        // Remover mapeamento
+        const newMappings = { ...callKeepMappings.current };
+        delete newMappings[callIdToClear];
+        callKeepMappings.current = newMappings;
+      } else {
+        console.log(
+          "Nenhum mapeamento CallKeep encontrado para PJSIP ID:",
+          callIdToClear
+        );
+      }
+
+      // Limpar referência PJSIP e estado local/global
+      if (activeCallRef.current?.getId() === callIdToClear) {
+        if (activeCallRef.current) {
+          try {
+            console.log("Removendo listeners da chamada ID:", callIdToClear);
+            activeCallRef.current.removeAllListeners();
+          } catch (e) {
+            console.warn("Erro ao remover listeners:", e);
+          }
+        }
+        activeCallRef.current = null;
+        setActiveCall(null);
+      }
+
+      // Parar InCallManager e Ringtone
+      console.log("Parando InCallManager e Ringtone (clearActiveCall)");
+      InCallManager.stopRingtone();
+      InCallManager.stop();
+      setIsSpeakerOn(false);
+    },
+    [setActiveCall]
+  );
 
   const updateStatus = useCallback(
     (status: ConnectionStatus) => {
@@ -67,170 +118,170 @@ export function usePjSipManager(): PjSipManagerHook {
     [setConnectionStatus]
   );
 
-  // Função para limpar chamada ativa (remove listeners, atualiza store)
-  const clearActiveCall = useCallback(() => {
-    if (activeCallRef.current) {
-      try {
-        console.log(
-          "Removendo listeners da chamada ID:",
-          activeCallRef.current.getId()
-        );
-        activeCallRef.current.removeAllListeners();
-      } catch (e) {
-        console.warn("Erro ao remover listeners da chamada:", e);
-      }
-      activeCallRef.current = null;
-    }
-    // Parar InCallManager e Ringtone ao limpar a chamada
-    console.log("Parando InCallManager e Ringtone (clearActiveCall)");
-    InCallManager.stopRingtone();
-    InCallManager.stop();
-    setIsSpeakerOn(false);
-    setActiveCall(null);
-  }, [setActiveCall]);
-
-  // --- Função para anexar listeners a uma chamada --- (Reutilizável)
+  // Definir attachCallListeners aqui
   const attachCallListeners = useCallback(
     (call: any) => {
-      console.log("Anexando listeners para chamada ID:", call.getId());
-      // Remover listeners antigos por segurança (não deve acontecer normalmente)
+      const pjsipCallId = call.getId();
+      console.log("Anexando listeners para chamada PJSIP ID:", pjsipCallId);
       call.removeAllListeners();
 
       call.addListener("on_call_state", (newState: string, reason: any) => {
         console.log(
-          `Call State Changed: ID=${call.getId()}, State=${newState}, Reason=${reason}`
+          `PJSIP State Changed: ID=${pjsipCallId}, State=${newState}, Reason=${reason}`
         );
         const callInfo = call.getInfo();
         const stateText = getCallStateText(newState);
+        // Assumir que getInfo() tem isIncoming
+        const isIncomingCall =
+          callInfo.isIncoming === true || callInfo.role === "UAS"; // Checar se é UAS (Server)
         const updatedCallInfo: CallInfo = {
-          id: call.getId(),
+          id: pjsipCallId,
           remoteUri: callInfo.remoteUri,
           state: newState,
           stateText: stateText,
         };
         setActiveCall(updatedCallInfo);
 
-        if (newState === "PJSIP_INV_STATE_CONFIRMED") {
-          console.log("Chamada confirmada, iniciando InCallManager...");
-          InCallManager.start({ media: "audio" });
-          InCallManager.setForceSpeakerphoneOn(false);
-          InCallManager.setSpeakerphoneOn(false);
-          setIsSpeakerOn(false);
-          if (Platform.OS === "ios") {
-            InCallManager.setMicrophoneMute(false);
+        const callKeepUUID = callKeepMappings.current[pjsipCallId];
+        if (!callKeepUUID) {
+          console.warn(
+            "CallKeep UUID não encontrado para PJSIP ID:",
+            pjsipCallId
+          );
+          if (newState === "PJSIP_INV_STATE_DISCONNECTED") {
+            clearActiveCall(pjsipCallId);
           }
+          return;
+        }
+
+        if (newState === "PJSIP_INV_STATE_CONFIRMED") {
+          console.log(
+            "Chamada confirmada, iniciando InCallManager e reportando ao CallKeep..."
+          );
+          if (!isIncomingCall) {
+            // Usar a flag verificada
+            RNCallKeep.reportConnectedOutgoingCallWithUUID(callKeepUUID);
+          }
+          InCallManager.start({ media: "audio" });
+          // ... (resto da lógica InCallManager)
         } else if (newState === "PJSIP_INV_STATE_DISCONNECTED") {
           console.log(
-            `Chamada ${call.getId()} desconectada (evento on_call_state).`
+            `Chamada PJSIP ${pjsipCallId} desconectada (evento on_call_state).`
           );
-          if (activeCallRef.current?.getId() === call.getId()) {
-            clearActiveCall();
-          }
+          clearActiveCall(pjsipCallId);
         }
       });
 
       call.addListener("on_call_media_state", (mediaInfo: any) => {
-        console.log(`Call Media State Changed: ID=${call.getId()}`, mediaInfo);
+        console.log(`Call Media State Changed: ID=${pjsipCallId}`, mediaInfo);
       });
     },
     [setActiveCall, clearActiveCall]
   );
 
-  // Função para limpar recursos PJSIP (incluindo chamada ativa)
-  const cleanupPjsip = useCallback(async () => {
-    console.log("Limpando recursos PJSIP...");
-    clearActiveCall(); // Limpar chamada ativa primeiro
-    updateStatus("Desconectado");
-    try {
-      if (accountRef.current) {
-        // Remover listeners da conta antes de liberar
-        accountRef.current.removeAllListeners();
-        // Tentar desregistrar (pode falhar se já desconectado, tratar silenciosamente)
-        try {
-          await accountRef.current.register(false);
-        } catch (regError) {
-          console.log("Falha silenciosa ao desregistrar:", regError);
-        }
-        await accountRef.current.release();
-        console.log("Conta SIP liberada.");
-      }
-      if (endpointRef.current) {
-        // Remover listeners do endpoint antes de liberar
-        endpointRef.current.removeAllListeners();
-        await endpointRef.current.release();
-        console.log("Endpoint PJSIP liberado.");
-      }
-    } catch (error) {
-      console.error("Erro ao liberar PJSIP:", error);
-    } finally {
-      accountRef.current = null;
-      endpointRef.current = null;
-    }
-  }, [updateStatus, clearActiveCall]);
+  const hangupCall = useCallback(
+    async (pjsipCallIdToHangup?: string) => {
+      const callId = pjsipCallIdToHangup || activeCallRef.current?.getId();
+      console.log(`Tentando desligar/cancelar chamada PJSIP ID: ${callId}`);
+      InCallManager.stopRingtone(); // Parar ringtone se estiver tocando
 
-  // Definir hangupCall ANTES de makeCall
-  const hangupCall = useCallback(async () => {
-    console.log("Tentando desligar/cancelar a chamada...");
-    // Parar ringtone caso esteja tocando (ex: usuário cancela incoming call)
-    InCallManager.stopRingtone();
-    const call = activeCallRef.current;
-    if (!call) {
-      return;
-    }
-    try {
-      await call.hangup();
-      console.log("Comando hangup enviado para chamada ID:", call.getId());
-    } catch (error) {
-      console.error("Erro ao desligar chamada:", error);
-      Alert.alert(
-        "Erro",
-        `Falha ao desligar: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      clearActiveCall(); // Tenta limpar mesmo com erro
-    }
-  }, [clearActiveCall]);
+      const callToHangup =
+        callId === activeCallRef.current?.getId()
+          ? activeCallRef.current
+          : null; // TODO: Precisaria buscar a instância da chamada PJSIP se não for a ativa (complexo)
 
-  // Definir makeCall DEPOIS de hangupCall
-  const makeCall = useCallback(
-    async (destination: string) => {
-      console.log(`Tentando ligar para: ${destination}`);
-      const account = accountRef.current;
-      if (!account) {
-        Alert.alert("Erro", "Conta SIP não está registrada.");
+      if (!callToHangup && callId) {
+        // Se a chamada não é a ativa mas temos o ID (veio do CallKeep), apenas limpamos
+        console.log("Chamada não ativa encontrada, limpando diretamente...");
+        clearActiveCall(callId);
         return;
       }
-      if (!destination) {
-        Alert.alert("Erro", "Número de destino não pode ser vazio.");
+
+      if (!callToHangup) {
+        console.log("Nenhuma chamada ativa para desligar/cancelar.");
         return;
-      }
-      if (activeCallRef.current) {
-        console.warn(
-          "Já existe uma chamada ativa, limpando antes de iniciar nova."
-        );
-        await hangupCall(); // Agora hangupCall está definida
       }
 
       try {
+        await callToHangup.hangup();
+        console.log("Comando hangup enviado para chamada PJSIP ID:", callId);
+        // A limpeza (incluindo CallKeep.endCall) será feita por on_call_state -> clearActiveCall
+      } catch (error) {
+        console.error("Erro ao desligar chamada PJSIP ID:", callId, error);
+        Alert.alert(
+          "Erro",
+          `Falha ao desligar: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        clearActiveCall(callId); // Tenta limpar mesmo com erro
+      }
+    },
+    [clearActiveCall]
+  );
+
+  const answerCall = useCallback(() => Promise.resolve(), []);
+  const declineCall = useCallback(() => Promise.resolve(), []);
+
+  // Definir toggleSpeaker AQUI, antes do return
+  const toggleSpeaker = useCallback(() => {
+    const nextSpeakerState = !isSpeakerOn;
+    console.log(`Alternando speaker para: ${nextSpeakerState ? "ON" : "OFF"}`);
+    InCallManager.setSpeakerphoneOn(nextSpeakerState);
+    if (Platform.OS === "ios") {
+      InCallManager.setForceSpeakerphoneOn(nextSpeakerState);
+    }
+    setIsSpeakerOn(nextSpeakerState);
+  }, [isSpeakerOn]);
+
+  const makeCall = useCallback(
+    async (destination: string) => {
+      // ... (verificações iniciais, limpar chamada anterior se houver)
+      try {
         const targetUri = `sip:${destination}@${sipConfig?.server}`;
         console.log(`Realizando chamada para ${targetUri}...`);
-        const call = await account.makeCall(targetUri);
-        activeCallRef.current = call;
-        attachCallListeners(call); // Usar função reutilizável
-        console.log("Chamada iniciada, ID:", call.getId());
 
+        // Gerar UUID para CallKeep ANTES de fazer a chamada PJSIP
+        const callKeepUUID = uuid.v4() as string;
+        const pjsipCallIdProvisorio = `outgoing-${callKeepUUID}`; // ID temporário antes de PJSIP criar um
+
+        // Informar ao CallKeep sobre a chamada saindo
+        console.log(`Iniciando chamada CallKeep UUID: ${callKeepUUID}`);
+        RNCallKeep.startCall(
+          callKeepUUID,
+          destination, // Número discado
+          destination, // Nome (pode melhorar)
+          "number",
+          false // hasVideo
+        );
+
+        // Tentar fazer a chamada PJSIP
+        const call = await accountRef.current.makeCall(targetUri);
+        const pjsipCallIdReal = call.getId();
+        activeCallRef.current = call;
+        console.log(`Chamada PJSIP iniciada, ID Real: ${pjsipCallIdReal}`);
+
+        // Atualizar mapeamento com ID real
+        callKeepMappings.current = {
+          ...callKeepMappings.current,
+          [pjsipCallIdReal]: callKeepUUID,
+        };
+        console.log(
+          `Mapeamento criado: PJSIP ${pjsipCallIdReal} -> CallKeep ${callKeepUUID}`
+        );
+        // Remover mapeamento provisório se necessário (não usamos)
+
+        // Anexar listeners PJSIP
+        attachCallListeners(call);
+
+        // Atualizar estado Zustand
         const initialCallInfo: CallInfo = {
-          id: call.getId(),
-          remoteUri: call.getInfo().remoteUri,
+          id: pjsipCallIdReal,
+          remoteUri: targetUri,
           state: "PJSIP_INV_STATE_CALLING",
           stateText: getCallStateText("PJSIP_INV_STATE_CALLING"),
         };
         setActiveCall(initialCallInfo);
-
-        // Tocar Ringtone
-        console.log("Iniciando Ringtone...");
-        InCallManager.startRingtone("_DEFAULT_");
       } catch (error) {
         console.error("Erro ao realizar chamada:", error);
         Alert.alert(
@@ -239,13 +290,100 @@ export function usePjSipManager(): PjSipManagerHook {
             error instanceof Error ? error.message : String(error)
           }`
         );
+        // Se falhar, precisamos encerrar a chamada no CallKeep também
+        const callKeepUUID = Object.keys(callKeepMappings.current).find((key) =>
+          key.startsWith("outgoing-")
+        ); // Tentar achar pelo ID provisório?
+        if (callKeepUUID) {
+          RNCallKeep.endCall(callKeepUUID);
+        }
         clearActiveCall();
       }
     },
-    [sipConfig, setActiveCall, clearActiveCall, hangupCall, attachCallListeners]
+    [sipConfig, setActiveCall, clearActiveCall, attachCallListeners]
   );
 
-  // --- Efeito para Carregar Configuração ao Montar --- //
+  // --- CallKeep Setup (Definir DEPOIS das funções de controle) --- //
+  const setupCallKeep = useCallback(() => {
+    console.log("Configurando RNCallKeep...");
+    try {
+      RNCallKeep.setup({
+        ios: {
+          appName: "SipNativeDemo", // Nome que aparece na UI do iOS
+        },
+        android: {
+          alertTitle: "Permissions required",
+          alertDescription:
+            "This application needs to access your phone accounts",
+          cancelButton: "Cancel",
+          okButton: "Ok",
+          additionalPermissions: [], // Adicionar permissões adicionais vazias
+          // Required to get audio in background when using Android ConnectionService
+          foregroundService: {
+            channelId: "com.sipnativedemo.callkeep",
+            channelName: "Foreground service for SIP calls",
+            notificationTitle: "SIP Call in progress",
+          },
+        },
+      });
+      RNCallKeep.setAvailable(true);
+      console.log("RNCallKeep configurado.");
+    } catch (err: any) {
+      console.error("Erro ao configurar RNCallKeep:", err.message);
+    }
+
+    // --- Listeners do CallKeep --- //
+    // Chamado quando o usuário atende pela UI nativa
+    RNCallKeep.addEventListener("answerCall", ({ callUUID }) => {
+      console.log(`[RNCallKeep] answerCall: ${callUUID}`);
+      const pjsipCallId = Object.keys(callKeepMappings.current).find(
+        (key) => callKeepMappings.current[key] === callUUID
+      );
+      if (pjsipCallId && activeCallRef.current?.getId() === pjsipCallId) {
+        answerCall(); // Função já definida
+      } else {
+        console.warn(
+          "[RNCallKeep] answerCall: Chamada PJSIP não encontrada para UUID:",
+          callUUID
+        );
+      }
+    });
+
+    // Chamado quando o usuário desliga/rejeita pela UI nativa
+    RNCallKeep.addEventListener("endCall", ({ callUUID }) => {
+      console.log(`[RNCallKeep] endCall: ${callUUID}`);
+      const pjsipCallId = Object.keys(callKeepMappings.current).find(
+        (key) => callKeepMappings.current[key] === callUUID
+      );
+      if (pjsipCallId) {
+        hangupCall(pjsipCallId); // Função já definida
+      } else {
+        console.warn(
+          "[RNCallKeep] endCall: Chamada PJSIP não encontrada para UUID:",
+          callUUID
+        );
+        // Garantir que a chamada seja encerrada no CallKeep de qualquer forma
+        RNCallKeep.endCall(callUUID);
+      }
+    });
+
+    // Outros listeners (DTMF, mute, hold) podem ser adicionados aqui
+
+    return () => {
+      console.log("Limpando listeners RNCallKeep...");
+      RNCallKeep.removeEventListener("answerCall");
+      RNCallKeep.removeEventListener("endCall");
+      // RNCallKeep.destroy(); // Cuidado: pode impedir futuras chamadas
+    };
+  }, [answerCall, hangupCall]); // Dependências corretas
+
+  // --- Efeito para configurar CallKeep ao montar (Definir DEPOIS do setupCallKeep)--- //
+  useEffect(() => {
+    const cleanupCallKeep = setupCallKeep();
+    return cleanupCallKeep;
+  }, [setupCallKeep]);
+
+  // --- Efeito para Carregar Configuração SIP --- //
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -287,13 +425,13 @@ export function usePjSipManager(): PjSipManagerHook {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Array de dependências vazio
 
-  // --- Efeito de Inicialização e Registro (depende de sipConfig) --- //
+  // --- Efeito de Inicialização PJSIP e Registro --- //
   useEffect(() => {
     const initializeAndRegister = async (config: SipConfig) => {
       // Prevenir inicialização dupla se já houver um endpoint
       if (endpointRef.current || accountRef.current) {
         console.log("PJSIP já inicializado, limpando antes de reconfigurar...");
-        await cleanupPjsip();
+        await clearActiveCall();
       }
 
       try {
@@ -356,11 +494,9 @@ export function usePjSipManager(): PjSipManagerHook {
         // -------------------------
 
         account.addListener("on_incoming_call", async (call: any) => {
-          console.log(
-            `Chamada Recebida: ID=${call.getId()}, from=${
-              call.getInfo().remoteUri
-            }`
-          );
+          const pjsipCallId = call.getId();
+          const remoteUri = call.getInfo().remoteUri;
+          console.log(`Chamada Recebida: ID=${pjsipCallId}, from=${remoteUri}`);
 
           if (activeCallRef.current) {
             console.warn("Rejeitando chamada recebida, já existe uma ativa.");
@@ -372,23 +508,41 @@ export function usePjSipManager(): PjSipManagerHook {
             return;
           }
 
-          // Definir como chamada ativa
+          // Gerar UUID para CallKeep
+          const callKeepUUID = uuid.v4() as string;
+          callKeepMappings.current = {
+            ...callKeepMappings.current,
+            [pjsipCallId]: callKeepUUID,
+          };
+          console.log(
+            `Mapeamento criado: PJSIP ${pjsipCallId} -> CallKeep ${callKeepUUID}`
+          );
+
+          // Definir como chamada ativa PJSIP
           activeCallRef.current = call;
-          attachCallListeners(call); // Anexar listeners on_call_state etc.
+          attachCallListeners(call);
 
           // Atualizar o store
-          const callInfo = call.getInfo();
           const incomingCallInfo: CallInfo = {
-            id: call.getId(),
-            remoteUri: callInfo.remoteUri,
+            id: pjsipCallId,
+            remoteUri: remoteUri,
             state: "PJSIP_INV_STATE_INCOMING",
             stateText: getCallStateText("PJSIP_INV_STATE_INCOMING"),
           };
           setActiveCall(incomingCallInfo);
 
-          // Tocar Ringtone DEPOIS de atualizar o estado
-          console.log("Iniciando Ringtone...");
-          InCallManager.startRingtone("_DEFAULT_");
+          // Mostrar UI nativa do CallKeep
+          console.log("Exibindo chamada recebida no CallKeep...");
+          RNCallKeep.displayIncomingCall(
+            callKeepUUID,
+            remoteUri, // Número/Nome a exibir
+            remoteUri, // Nome do contato (pode melhorar buscando na lista)
+            "number",
+            true // hasVideo (ajustar se usar vídeo)
+          );
+
+          // Tocar Ringtone (opcional, CallKeep pode cuidar disso)
+          // InCallManager.startRingtone('_DEFAULT_');
         });
         // -------------------------
 
@@ -402,7 +556,7 @@ export function usePjSipManager(): PjSipManagerHook {
     if (sipConfig) {
       initializeAndRegister(sipConfig);
     } else {
-      cleanupPjsip();
+      clearActiveCall();
     }
 
     // Função de limpeza do useEffect: chamada quando o componente desmonta
@@ -411,7 +565,7 @@ export function usePjSipManager(): PjSipManagerHook {
       // Garante a limpeza ao desmontar o componente que usa o hook
       if (sipConfig) {
         // Só limpa se havia uma configuração ativa
-        cleanupPjsip();
+        clearActiveCall();
       }
     };
 
@@ -419,22 +573,11 @@ export function usePjSipManager(): PjSipManagerHook {
     // Isso evita loops se o status mudar rapidamente.
   }, [
     sipConfig,
-    cleanupPjsip,
+    clearActiveCall,
     updateStatus,
     setActiveCall,
     attachCallListeners,
   ]);
-
-  // Definir toggleSpeaker AQUI, antes do return
-  const toggleSpeaker = useCallback(() => {
-    const nextSpeakerState = !isSpeakerOn;
-    console.log(`Alternando speaker para: ${nextSpeakerState ? "ON" : "OFF"}`);
-    InCallManager.setSpeakerphoneOn(nextSpeakerState);
-    if (Platform.OS === "ios") {
-      InCallManager.setForceSpeakerphoneOn(nextSpeakerState);
-    }
-    setIsSpeakerOn(nextSpeakerState);
-  }, [isSpeakerOn]);
 
   // Retornar funções e estados relevantes (status, etc.)
   // Por enquanto, o hook apenas gerencia a conexão em background.
@@ -442,8 +585,8 @@ export function usePjSipManager(): PjSipManagerHook {
   return {
     makeCall,
     hangupCall,
-    answerCall: () => Promise.resolve(),
-    declineCall: () => Promise.resolve(),
+    answerCall,
+    declineCall,
     toggleSpeaker,
     isSpeakerOn,
   };
